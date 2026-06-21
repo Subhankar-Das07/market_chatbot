@@ -1,0 +1,16 @@
+fastapi
+uvicorn[standard]
+motor
+pymongo
+python-dotenv
+python-multipart
+langchain
+langchain-core
+langchain-community
+langchain-mongodb
+langchain-huggingface
+langchain-groq
+sentence-transformers
+beautifulsoup4
+PyMuPDF
+certifi
