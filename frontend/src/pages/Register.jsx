@@ -22,7 +22,7 @@ export default function Register() {
       // (Using handleRegister from context directly as requested or bypassing it;
       // We will assume handleRegister is updated or we just rely on it returning token.
       // To strictly follow the plan, we will import registerUser and call it)
-      const res = await fetch('http://localhost:8000/api/auth/register', {
+      const res = await fetch('https://market-chatbot.onrender.com/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password })
