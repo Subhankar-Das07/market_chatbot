@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef } from 'react';
-import { useState, useEffect, useRef } from 'react';
 import { Upload, FileText, Trash2, Search, RefreshCw, CheckCircle, AlertCircle, Clock, Edit2, Play, Check, X, FileSearch } from 'lucide-react';
 import { fetchReports, uploadReport, deleteReport, updateReport, reindexReport, getReportSummary } from '../api/api';
 
