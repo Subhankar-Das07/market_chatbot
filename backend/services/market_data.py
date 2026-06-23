@@ -2,49 +2,92 @@
 MarketDataService — Singleton async market data engine.
 
 Architecture:
-  - In-memory price cache keyed by ticker symbol.
-  - A background asyncio task ticks every TICK_INTERVAL seconds,
-    updating prices with a simulated random walk.
-  - To swap in a real data source (Alpha Vantage, Binance, Yahoo),
-    replace only the `_fetch_live_price` coroutine below.
+  - In-memory price cache keyed by our internal ticker symbol.
+  - A background asyncio task fires every TICK_INTERVAL seconds.
+  - Each tick issues ONE batch HTTP request to Yahoo Finance's public Quote API,
+    fetching all 8 symbols in a single round-trip to minimise rate-limit exposure.
+  - On any HTTP or parse failure the old cached prices are preserved unchanged,
+    so the WebSocket broadcast layer never crashes or serves stale-error data.
+  - The aiohttp ClientSession is reused across ticks (created once on startup,
+    closed on shutdown) for maximum connection efficiency.
+
+Ticker mapping:
+  Internal │ Yahoo Finance symbol
+  ─────────┼────────────────────
+  BTC      │ BTC-USD
+  ETH      │ ETH-USD
+  AAPL     │ AAPL
+  TSLA     │ TSLA
+  SPY      │ SPY
+  NVDA     │ NVDA
+  MSFT     │ MSFT
+  SOL      │ SOL-USD
+
+To add a new asset: add one entry to ASSET_CATALOG with its Yahoo symbol.
+No other file needs to change.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import random
 import time
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
+
+import aiohttp
 
 logger = logging.getLogger(__name__)
 
 # ── Configurable constants ────────────────────────────────────────────────────
 
-TICK_INTERVAL: float = 3.0  # seconds between price updates
+TICK_INTERVAL: float = 7.0          # seconds between Yahoo Finance fetches
+REQUEST_TIMEOUT: float = 8.0        # aiohttp total timeout per batch request
 
-# Seed prices and metadata for tracked assets.
-# Add / remove entries here to expand coverage without touching any other file.
-ASSET_CATALOG: Dict[str, Dict[str, Any]] = {
-    "BTC":  {"name": "Bitcoin",       "base_price": 67_000.0, "category": "crypto",  "currency": "USD"},
-    "ETH":  {"name": "Ethereum",      "base_price":  3_500.0, "category": "crypto",  "currency": "USD"},
-    "AAPL": {"name": "Apple Inc.",    "base_price":    195.0, "category": "equity",  "currency": "USD"},
-    "TSLA": {"name": "Tesla Inc.",    "base_price":    240.0, "category": "equity",  "currency": "USD"},
-    "SPY":  {"name": "S&P 500 ETF",  "base_price":    530.0, "category": "etf",     "currency": "USD"},
-    "NVDA": {"name": "NVIDIA Corp.",  "base_price":    900.0, "category": "equity",  "currency": "USD"},
-    "MSFT": {"name": "Microsoft",     "base_price":    420.0, "category": "equity",  "currency": "USD"},
-    "SOL":  {"name": "Solana",        "base_price":    165.0, "category": "crypto",  "currency": "USD"},
+YAHOO_QUOTE_URL = (
+    "https://query1.finance.yahoo.com/v7/finance/quote"
+)
+
+# Mimic a browser so Yahoo doesn't reject the automated request.
+REQUEST_HEADERS: Dict[str, str] = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept":          "application/json",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Origin":          "https://finance.yahoo.com",
+    "Referer":         "https://finance.yahoo.com/",
 }
 
-# Maximum random-walk step as a fraction of price per tick (e.g. 0.3 %).
-VOLATILITY_FRACTION: float = 0.003
+# ── Asset catalog ─────────────────────────────────────────────────────────────
+# Each entry: internal_ticker → metadata including the Yahoo Finance symbol.
+# The base_price is used ONLY as the seed while the first live fetch is in flight.
+
+ASSET_CATALOG: Dict[str, Dict[str, Any]] = {
+    "BTC":  {"name": "Bitcoin",      "yahoo": "BTC-USD",  "base_price": 67_000.0, "category": "crypto",  "currency": "USD"},
+    "ETH":  {"name": "Ethereum",     "yahoo": "ETH-USD",  "base_price":  3_500.0, "category": "crypto",  "currency": "USD"},
+    "AAPL": {"name": "Apple Inc.",   "yahoo": "AAPL",     "base_price":    195.0, "category": "equity",  "currency": "USD"},
+    "TSLA": {"name": "Tesla Inc.",   "yahoo": "TSLA",     "base_price":    240.0, "category": "equity",  "currency": "USD"},
+    "SPY":  {"name": "S&P 500 ETF",  "yahoo": "SPY",      "base_price":    530.0, "category": "etf",     "currency": "USD"},
+    "NVDA": {"name": "NVIDIA Corp.", "yahoo": "NVDA",     "base_price":    900.0, "category": "equity",  "currency": "USD"},
+    "MSFT": {"name": "Microsoft",    "yahoo": "MSFT",     "base_price":    420.0, "category": "equity",  "currency": "USD"},
+    "SOL":  {"name": "Solana",       "yahoo": "SOL-USD",  "base_price":    165.0, "category": "crypto",  "currency": "USD"},
+}
+
+# Pre-build the batch symbols string and a reverse-lookup map (yahoo → internal)
+_YAHOO_SYMBOLS: str = ",".join(meta["yahoo"] for meta in ASSET_CATALOG.values())
+_YAHOO_TO_INTERNAL: Dict[str, str] = {
+    meta["yahoo"]: ticker for ticker, meta in ASSET_CATALOG.items()
+}
 
 
 # ── Singleton ─────────────────────────────────────────────────────────────────
 
 class MarketDataService:
     """
-    Central in-memory market data engine.
+    Central in-memory market data engine backed by Yahoo Finance.
 
     Usage:
         service = MarketDataService.instance()
@@ -74,24 +117,33 @@ class MarketDataService:
             return
         self._cache: Dict[str, Dict[str, Any]] = {}
         self._task: Optional[asyncio.Task] = None
+        self._session: Optional[aiohttp.ClientSession] = None
         self._lock = asyncio.Lock()
         self._running = False
         self._seed_cache()
         self._initialised = True
-        logger.info("MarketDataService initialised with %d assets.", len(ASSET_CATALOG))
+        logger.info(
+            "MarketDataService initialised with %d assets. Yahoo symbols: %s",
+            len(ASSET_CATALOG),
+            _YAHOO_SYMBOLS,
+        )
 
     def _seed_cache(self) -> None:
-        """Populate the cache with base prices before the first tick."""
+        """
+        Populate the cache with base prices so the WebSocket has something to
+        broadcast immediately on startup before the first live fetch returns.
+        """
         for ticker, meta in ASSET_CATALOG.items():
             self._cache[ticker] = {
-                "ticker": ticker,
-                "name": meta["name"],
-                "price": meta["base_price"],
-                "prev_close": meta["base_price"],
-                "change": 0.0,
-                "change_pct": 0.0,
-                "category": meta["category"],
-                "currency": meta["currency"],
+                "ticker":       ticker,
+                "name":         meta["name"],
+                "price":        meta["base_price"],
+                "prev_close":   meta["base_price"],
+                "change":       0.0,
+                "change_pct":   0.0,
+                "category":     meta["category"],
+                "currency":     meta["currency"],
+                "source":       "seed",           # 'seed' | 'yahoo' | 'stale'
                 "last_updated": time.time(),
             }
 
@@ -105,27 +157,36 @@ class MarketDataService:
         """Return a single asset quote or None if the ticker is unknown."""
         return self._cache.get(ticker.upper())
 
-    def list_tickers(self) -> list[str]:
+    def list_tickers(self) -> List[str]:
         return list(self._cache.keys())
 
     # ── Background feed ───────────────────────────────────────────────────────
 
     async def start_background_feed(self) -> None:
         """
-        Launch the background price-tick task.
+        Launch the background price-tick task and create the persistent aiohttp session.
         Safe to call multiple times — only one task will ever run.
         """
         if self._running:
             logger.warning("MarketDataService background feed already running.")
             return
+
+        # Create a single reusable session — avoids TCP handshake overhead on every tick.
+        timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
+        self._session = aiohttp.ClientSession(
+            headers=REQUEST_HEADERS,
+            timeout=timeout,
+        )
+
         self._running = True
         self._task = asyncio.create_task(self._tick_loop(), name="market-data-tick")
         logger.info(
-            "MarketDataService background feed started (%.1fs interval).", TICK_INTERVAL
+            "MarketDataService live feed started (%.1fs interval, Yahoo Finance).",
+            TICK_INTERVAL,
         )
 
     async def stop_background_feed(self) -> None:
-        """Gracefully cancel the background tick task on application shutdown."""
+        """Gracefully cancel the background tick task and close the HTTP session."""
         self._running = False
         if self._task and not self._task.done():
             self._task.cancel()
@@ -133,51 +194,108 @@ class MarketDataService:
                 await self._task
             except asyncio.CancelledError:
                 pass
-        logger.info("MarketDataService background feed stopped.")
+        if self._session and not self._session.closed:
+            await self._session.close()
+        logger.info("MarketDataService live feed stopped.")
 
     # ── Internal tick loop ────────────────────────────────────────────────────
 
     async def _tick_loop(self) -> None:
         """
-        Runs forever until cancelled.
-        Updates every tracked ticker by calling `_fetch_live_price`.
+        Fires every TICK_INTERVAL seconds.
+        Issues a single batch request for all symbols, then updates the cache.
+        If the request fails for any reason, old prices are kept untouched.
         """
         while self._running:
             await asyncio.sleep(TICK_INTERVAL)
-            async with self._lock:
-                for ticker in list(self._cache.keys()):
-                    try:
-                        new_price = await self._fetch_live_price(ticker)
-                        old_price = self._cache[ticker]["prev_close"]
-                        change = round(new_price - old_price, 4)
-                        change_pct = round((change / old_price) * 100, 4) if old_price else 0.0
-                        self._cache[ticker].update(
-                            {
-                                "price": round(new_price, 4),
-                                "change": change,
-                                "change_pct": change_pct,
-                                "last_updated": time.time(),
-                            }
+            try:
+                live_prices = await self._fetch_batch_quotes()
+                if live_prices:
+                    async with self._lock:
+                        self._apply_quotes(live_prices)
+                        logger.debug(
+                            "Cache updated: %d assets from Yahoo Finance.", len(live_prices)
                         )
-                    except Exception as exc:  # noqa: BLE001
-                        logger.warning("Tick error for %s: %s", ticker, exc)
-
-    # ── Data source adapter ───────────────────────────────────────────────────
-    # ▼▼▼  SWAP THIS ONE COROUTINE TO CONNECT A REAL EXCHANGE API  ▼▼▼
-
-    async def _fetch_live_price(self, ticker: str) -> float:
-        """
-        MVP implementation: Gaussian random walk around the current price.
-
-        Production replacement (Alpha Vantage example):
-            async with aiohttp.ClientSession() as sess:
-                r = await sess.get(
-                    "https://www.alphavantage.co/query",
-                    params={"function": "GLOBAL_QUOTE", "symbol": ticker, "apikey": API_KEY}
+            except asyncio.CancelledError:
+                raise  # propagate cancellation cleanly
+            except Exception as exc:  # noqa: BLE001
+                # Keep previous prices — never crash the broadcast layer.
+                logger.warning(
+                    "MarketDataService tick failed — retaining cached prices. Error: %s", exc
                 )
-                data = await r.json()
-                return float(data["Global Quote"]["05. price"])
+
+    # ── Yahoo Finance batch fetch ─────────────────────────────────────────────
+
+    async def _fetch_batch_quotes(self) -> Dict[str, float]:
         """
-        current = self._cache[ticker]["price"]
-        step = current * VOLATILITY_FRACTION
-        return max(0.01, current + random.gauss(0, step))
+        Fetch regularMarketPrice for all symbols in a single HTTP GET.
+
+        Returns:
+            Dict mapping internal ticker (e.g. "BTC") → live float price.
+            Returns an empty dict if the response is malformed or the request fails.
+        """
+        if self._session is None or self._session.closed:
+            logger.warning("aiohttp session is closed — skipping tick.")
+            return {}
+
+        params = {
+            "symbols": _YAHOO_SYMBOLS,
+            "fields":  "regularMarketPrice,shortName",
+        }
+
+        async with self._session.get(YAHOO_QUOTE_URL, params=params) as resp:
+            if resp.status != 200:
+                logger.warning(
+                    "Yahoo Finance returned HTTP %d — skipping tick.", resp.status
+                )
+                return {}
+
+            data = await resp.json(content_type=None)  # content_type=None tolerates text/json
+
+        results: Dict[str, float] = {}
+        quotes: list = (
+            data.get("quoteResponse", {}).get("result") or []
+        )
+
+        for q in quotes:
+            yahoo_symbol = q.get("symbol", "")
+            price        = q.get("regularMarketPrice")
+            if price is None:
+                logger.debug("No regularMarketPrice for %s — skipping.", yahoo_symbol)
+                continue
+            internal = _YAHOO_TO_INTERNAL.get(yahoo_symbol)
+            if internal:
+                results[internal] = float(price)
+
+        logger.info(
+            "Yahoo Finance batch fetch: %d / %d symbols resolved.",
+            len(results),
+            len(ASSET_CATALOG),
+        )
+        return results
+
+    # ── Cache update ──────────────────────────────────────────────────────────
+
+    def _apply_quotes(self, live_prices: Dict[str, float]) -> None:
+        """
+        Merge the live prices from Yahoo into the in-memory cache.
+        Calculates change and change_pct relative to the previous cached price
+        so the WebSocket stream always exposes accurate delta values.
+        """
+        now = time.time()
+        for ticker, new_price in live_prices.items():
+            if ticker not in self._cache:
+                continue
+            old_price  = self._cache[ticker]["price"]
+            change     = round(new_price - old_price, 6)
+            change_pct = round((change / old_price) * 100, 6) if old_price else 0.0
+
+            self._cache[ticker].update(
+                {
+                    "price":        round(new_price, 6),
+                    "change":       change,
+                    "change_pct":   change_pct,
+                    "source":       "yahoo",
+                    "last_updated": now,
+                }
+            )
