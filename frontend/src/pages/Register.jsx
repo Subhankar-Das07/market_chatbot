@@ -18,35 +18,20 @@ export default function Register() {
     setLoading(true);
     
     try {
-      // 1. Await the isolated registration API call
-      // (Using handleRegister from context directly as requested or bypassing it;
-      // We will assume handleRegister is updated or we just rely on it returning token.
-      // To strictly follow the plan, we will import registerUser and call it)
-      const res = await fetch('https://market-chatbot.onrender.com/api/auth/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password })
-      }).then(r => r.json());
-      
-      if (res.detail) throw new Error(res.detail);
-      
-      // 2. Catch the returned Auth Token
-      const token = res.access_token;
-      
-      if (token) {
-        // 3. Save strictly to LocalStorage before redirecting
-        localStorage.setItem('token', token);
-        
-        // 4. Execute the redirect
-        navigate('/');
-        
-        // 5. Force a reload so AuthContext automatically authenticates the new session
-        window.location.reload();
-      } else {
-        throw new Error("No token returned from server.");
-      }
+      await handleRegister(email, password);
+      navigate('/');
     } catch (err) {
-      setError(err.message || 'Registration failed. Try a different email.');
+      let errorMsg = 'Registration failed. Try a different email.';
+      if (err.response?.data?.detail) {
+        if (typeof err.response.data.detail === 'string') {
+          errorMsg = err.response.data.detail;
+        } else if (Array.isArray(err.response.data.detail)) {
+          errorMsg = err.response.data.detail[0].msg;
+        }
+      } else if (err.message) {
+        errorMsg = err.message;
+      }
+      setError(errorMsg);
     } finally {
       setLoading(false);
     }
