@@ -11,6 +11,7 @@ import services.rag_service
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from routes import chat, reports, stats, auth
 from routes import ws as ws_routes
 from routes import portfolio as portfolio_routes
@@ -89,6 +90,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(GZipMiddleware, minimum_size=500)
 
 # ── Routes ─────────────────────────────────────────────────────────────────
 app.include_router(health_router)

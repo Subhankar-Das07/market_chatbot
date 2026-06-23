@@ -1,17 +1,19 @@
-import { useState, useEffect, useContext } from 'react';
+import { useState, useEffect, useContext, lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, useLocation, Navigate } from 'react-router-dom';
 import { Briefcase, Eye, HelpCircle, Settings } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import Landing from './pages/Landing';
-import Dashboard from './pages/Dashboard';
-import Analyst from './pages/Analyst';
-import Reports from './pages/Reports';
-import Placeholder from './pages/Placeholder';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import { AuthProvider, AuthContext } from './context/AuthContext';
 import { checkHealth } from './api/api';
 import './index.css';
+
+// Lazy loaded heavy routes
+const Dashboard   = lazy(() => import('./pages/Dashboard'));
+const Analyst     = lazy(() => import('./pages/Analyst'));
+const Reports     = lazy(() => import('./pages/Reports'));
+const Placeholder = lazy(() => import('./pages/Placeholder'));
 
 const PAGE_TITLES = {
   '/dashboard':  'My Dashboard',
@@ -81,17 +83,23 @@ function AppLayout() {
       <Sidebar apiHealth={apiHealth} />
       <div className="main-content">
         <Header />
-        <Routes>
-          <Route path="/dashboard"  element={<Dashboard />} />
-          <Route path="/analyst"    element={<Analyst />} />
-          <Route path="/reports"    element={<Reports />} />
-          <Route path="/portfolio"  element={<Placeholder title="My Portfolio" icon={Briefcase} description="Portfolio management and performance tracking coming soon." />} />
-          <Route path="/watchlist"  element={<Placeholder title="My Watchlist" icon={Eye} description="Custom watchlists with real-time alerts coming soon." />} />
-          <Route path="/support"    element={<Placeholder title="Support" icon={HelpCircle} description="Help documentation and support tickets coming soon." />} />
-          <Route path="/settings"   element={<Placeholder title="Settings" icon={Settings} description="Account settings, API keys, and preferences coming soon." />} />
-          {/* Fallback: if user visits /app root, redirect to dashboard */}
-          <Route path="*"           element={<Navigate to="/dashboard" replace />} />
-        </Routes>
+        <Suspense fallback={
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--color-slate)' }}>
+            Loading module...
+          </div>
+        }>
+          <Routes>
+            <Route path="/dashboard"  element={<Dashboard />} />
+            <Route path="/analyst"    element={<Analyst />} />
+            <Route path="/reports"    element={<Reports />} />
+            <Route path="/portfolio"  element={<Placeholder title="My Portfolio" icon={Briefcase} description="Portfolio management and performance tracking coming soon." />} />
+            <Route path="/watchlist"  element={<Placeholder title="My Watchlist" icon={Eye} description="Custom watchlists with real-time alerts coming soon." />} />
+            <Route path="/support"    element={<Placeholder title="Support" icon={HelpCircle} description="Help documentation and support tickets coming soon." />} />
+            <Route path="/settings"   element={<Placeholder title="Settings" icon={Settings} description="Account settings, API keys, and preferences coming soon." />} />
+            {/* Fallback: if user visits /app root, redirect to dashboard */}
+            <Route path="*"           element={<Navigate to="/dashboard" replace />} />
+          </Routes>
+        </Suspense>
       </div>
     </div>
   );
