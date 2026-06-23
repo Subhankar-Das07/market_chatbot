@@ -10,6 +10,7 @@ router = APIRouter(tags=["auth"])
 
 @router.post("/register")
 async def register(user: UserCreate):
+    print(f"🔥 REGISTRATION INITIATED FOR: {user.email}")
     try:
         db = get_db()
         
@@ -26,7 +27,9 @@ async def register(user: UserCreate):
         }
         
         # 2. Insert the new User into the Users collection
+        print("⏳ Attempting MongoDB insertion...")
         result = await db["users"].insert_one(user_dict)
+        print("✅ MongoDB insertion successful")
         
         # 3. AWAIT and retrieve the newly generated user_id
         user_id_str = str(result.inserted_id)

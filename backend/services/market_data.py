@@ -34,32 +34,14 @@ import logging
 import time
 from typing import Dict, Any, List, Optional
 
-import aiohttp
+import yfinance as yf
 
 logger = logging.getLogger(__name__)
 
 # ── Configurable constants ────────────────────────────────────────────────────
 
 TICK_INTERVAL: float = 7.0          # seconds between Yahoo Finance fetches
-REQUEST_TIMEOUT: float = 8.0        # aiohttp total timeout per batch request
-
-YAHOO_QUOTE_URL = (
-    "https://query1.finance.yahoo.com/v7/finance/quote"
-)
-
-# Mimic a browser so Yahoo doesn't reject the automated request.
-REQUEST_HEADERS: Dict[str, str] = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept":          "application/json",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Origin":          "https://finance.yahoo.com",
-    "Referer":         "https://finance.yahoo.com/",
-}
+REQUEST_TIMEOUT: float = 8.0        # timeout per batch request (used internally if needed)
 
 # ── Asset catalog ─────────────────────────────────────────────────────────────
 # Each entry: internal_ticker → metadata including the Yahoo Finance symbol.
@@ -117,7 +99,6 @@ class MarketDataService:
             return
         self._cache: Dict[str, Dict[str, Any]] = {}
         self._task: Optional[asyncio.Task] = None
-        self._session: Optional[aiohttp.ClientSession] = None
         self._lock = asyncio.Lock()
         self._running = False
         self._seed_cache()
@@ -164,19 +145,12 @@ class MarketDataService:
 
     async def start_background_feed(self) -> None:
         """
-        Launch the background price-tick task and create the persistent aiohttp session.
+        Launch the background price-tick task.
         Safe to call multiple times — only one task will ever run.
         """
         if self._running:
             logger.warning("MarketDataService background feed already running.")
             return
-
-        # Create a single reusable session — avoids TCP handshake overhead on every tick.
-        timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
-        self._session = aiohttp.ClientSession(
-            headers=REQUEST_HEADERS,
-            timeout=timeout,
-        )
 
         self._running = True
         self._task = asyncio.create_task(self._tick_loop(), name="market-data-tick")
@@ -186,7 +160,7 @@ class MarketDataService:
         )
 
     async def stop_background_feed(self) -> None:
-        """Gracefully cancel the background tick task and close the HTTP session."""
+        """Gracefully cancel the background tick task."""
         self._running = False
         if self._task and not self._task.done():
             self._task.cancel()
@@ -194,8 +168,6 @@ class MarketDataService:
                 await self._task
             except asyncio.CancelledError:
                 pass
-        if self._session and not self._session.closed:
-            await self._session.close()
         logger.info("MarketDataService live feed stopped.")
 
     # ── Internal tick loop ────────────────────────────────────────────────────
@@ -226,53 +198,42 @@ class MarketDataService:
 
     # ── Yahoo Finance batch fetch ─────────────────────────────────────────────
 
+    def _fetch_yfinance_sync(self) -> Dict[str, float]:
+        """Synchronous wrapper for yfinance."""
+        tickers = yf.Tickers(_YAHOO_SYMBOLS.replace(",", " "))
+        results: Dict[str, float] = {}
+        for yahoo_symbol, internal in _YAHOO_TO_INTERNAL.items():
+            try:
+                # yfinance ticker.info can be slow, but fast_info is better.
+                # using fast_info to get the last price
+                ticker_obj = tickers.tickers[yahoo_symbol]
+                price = ticker_obj.fast_info.get("lastPrice")
+                if price is not None:
+                    results[internal] = float(price)
+            except Exception as e:
+                logger.debug("Failed to get fast_info for %s: %s", yahoo_symbol, e)
+                
+        return results
+
     async def _fetch_batch_quotes(self) -> Dict[str, float]:
         """
-        Fetch regularMarketPrice for all symbols in a single HTTP GET.
+        Fetch regularMarketPrice for all symbols in a single batch using yfinance.
 
         Returns:
             Dict mapping internal ticker (e.g. "BTC") → live float price.
-            Returns an empty dict if the response is malformed or the request fails.
+            Returns an empty dict if the request fails.
         """
-        if self._session is None or self._session.closed:
-            logger.warning("aiohttp session is closed — skipping tick.")
+        try:
+            results = await asyncio.to_thread(self._fetch_yfinance_sync)
+            logger.info(
+                "yfinance batch fetch: %d / %d symbols resolved.",
+                len(results),
+                len(ASSET_CATALOG),
+            )
+            return results
+        except Exception as e:
+            logger.warning("yfinance fetch error: %s", e)
             return {}
-
-        params = {
-            "symbols": _YAHOO_SYMBOLS,
-            "fields":  "regularMarketPrice,shortName",
-        }
-
-        async with self._session.get(YAHOO_QUOTE_URL, params=params) as resp:
-            if resp.status != 200:
-                logger.warning(
-                    "Yahoo Finance returned HTTP %d — skipping tick.", resp.status
-                )
-                return {}
-
-            data = await resp.json(content_type=None)  # content_type=None tolerates text/json
-
-        results: Dict[str, float] = {}
-        quotes: list = (
-            data.get("quoteResponse", {}).get("result") or []
-        )
-
-        for q in quotes:
-            yahoo_symbol = q.get("symbol", "")
-            price        = q.get("regularMarketPrice")
-            if price is None:
-                logger.debug("No regularMarketPrice for %s — skipping.", yahoo_symbol)
-                continue
-            internal = _YAHOO_TO_INTERNAL.get(yahoo_symbol)
-            if internal:
-                results[internal] = float(price)
-
-        logger.info(
-            "Yahoo Finance batch fetch: %d / %d symbols resolved.",
-            len(results),
-            len(ASSET_CATALOG),
-        )
-        return results
 
     # ── Cache update ──────────────────────────────────────────────────────────
 
