@@ -848,3 +848,21 @@ img { max-width: 100%; display: block; }
 .session-actions button:hover { background: var(--color-surface-hi); color: var(--color-text); }
 .session-edit-mode { display: flex; gap: 4px; flex: 1; align-items: center; }
 .session-edit-mode input { flex: 1; font-size: 13px; padding: 2px 4px; border: 1px solid var(--color-blue); border-radius: 4px; outline: none; }
+
+/* ── Animations ─────────────────────────────────────────────────────────── */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.4; transform: scale(1.4); }
+}
+@keyframes flash-up {
+  0%   { background: rgba(52,211,153,0.18); }
+  100% { background: transparent; }
+}
+@keyframes flash-down {
+  0%   { background: rgba(248,113,113,0.18); }
+  100% { background: transparent; }
+}

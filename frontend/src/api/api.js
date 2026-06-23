@@ -55,6 +55,13 @@ export const messageFeedback = (messageId, feedback) => api.post(`/api/messages/
 // Legacy
 export const fetchQueryHistory = (limit = 20) => api.get(`/api/queries?limit=${limit}`);
 
+// Portfolio & Watchlist
+export const getPortfolio        = ()           => api.get('/api/portfolio');
+export const addToPortfolio      = (payload)    => api.post('/api/portfolio/add', payload);
+export const removeFromPortfolio = (ticker)     => api.delete(`/api/portfolio/${ticker}`);
+export const updatePortfolioItem = (ticker, d)  => api.patch(`/api/portfolio/${ticker}`, d);
+export const getMarketSnapshot   = ()           => api.get('/api/portfolio/market');
+
 // Streaming Chat
 export const sendChatMessage = (queryText, sessionId, onChunk, onDone, onError) => {
   const controller = new AbortController();
