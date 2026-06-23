@@ -6,7 +6,7 @@ from services.db import get_db
 from datetime import datetime, timezone
 from bson import ObjectId
 
-router = APIRouter(prefix="/api/auth", tags=["auth"])
+router = APIRouter(tags=["auth"])
 
 @router.post("/register")
 async def register(user: UserCreate):
