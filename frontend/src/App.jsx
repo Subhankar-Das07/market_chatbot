@@ -2,6 +2,7 @@ import { useState, useEffect, useContext } from 'react';
 import { BrowserRouter, Routes, Route, useLocation, Navigate } from 'react-router-dom';
 import { Briefcase, Eye, HelpCircle, Settings } from 'lucide-react';
 import Sidebar from './components/Sidebar';
+import Landing from './pages/Landing';
 import Dashboard from './pages/Dashboard';
 import Analyst from './pages/Analyst';
 import Reports from './pages/Reports';
@@ -13,13 +14,13 @@ import { checkHealth } from './api/api';
 import './index.css';
 
 const PAGE_TITLES = {
-  '/':          'Market Overview',
-  '/analyst':   'AI Financial Analyst',
-  '/reports':   'Market Reports',
-  '/portfolio': 'Portfolio',
-  '/watchlist': 'Watchlist',
-  '/support':   'Support',
-  '/settings':  'Settings',
+  '/dashboard':  'My Dashboard',
+  '/analyst':    'AI Financial Analyst',
+  '/reports':    'Market Reports',
+  '/portfolio':  'My Portfolio',
+  '/watchlist':  'My Watchlist',
+  '/support':    'Support',
+  '/settings':   'Settings',
 };
 
 function Header() {
@@ -37,20 +38,31 @@ function Header() {
   );
 }
 
+/** Requires a valid auth token. Redirects to /login if not logged in. */
 function ProtectedRoute({ children }) {
   const { user, loading } = useContext(AuthContext);
-  if (loading) return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', color: 'var(--color-slate)' }}>Loading...</div>;
+  if (loading) return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', color: 'var(--color-slate)' }}>
+      Loading...
+    </div>
+  );
   if (!user) return <Navigate to="/login" replace />;
   return children;
 }
 
+/** Public-only route (login / register). Redirects to /dashboard if already logged in. */
 function AuthRoute({ children }) {
   const { user, loading } = useContext(AuthContext);
-  if (loading) return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', color: 'var(--color-slate)' }}>Loading...</div>;
-  if (user) return <Navigate to="/" replace />;
+  if (loading) return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', color: 'var(--color-slate)' }}>
+      Loading...
+    </div>
+  );
+  if (user) return <Navigate to="/dashboard" replace />;
   return children;
 }
 
+/** The authenticated app shell with sidebar + inner routes. */
 function AppLayout() {
   const [apiHealth, setApiHealth] = useState(null);
 
@@ -70,13 +82,15 @@ function AppLayout() {
       <div className="main-content">
         <Header />
         <Routes>
-          <Route path="/"          element={<Dashboard />} />
-          <Route path="/analyst"   element={<Analyst />} />
-          <Route path="/reports"   element={<Reports />} />
-          <Route path="/portfolio" element={<Placeholder title="Portfolio" icon={Briefcase} description="Portfolio management and performance tracking coming soon." />} />
-          <Route path="/watchlist" element={<Placeholder title="Watchlist" icon={Eye} description="Custom watchlists with real-time alerts coming soon." />} />
-          <Route path="/support"   element={<Placeholder title="Support" icon={HelpCircle} description="Help documentation and support tickets coming soon." />} />
-          <Route path="/settings"  element={<Placeholder title="Settings" icon={Settings} description="Account settings, API keys, and preferences coming soon." />} />
+          <Route path="/dashboard"  element={<Dashboard />} />
+          <Route path="/analyst"    element={<Analyst />} />
+          <Route path="/reports"    element={<Reports />} />
+          <Route path="/portfolio"  element={<Placeholder title="My Portfolio" icon={Briefcase} description="Portfolio management and performance tracking coming soon." />} />
+          <Route path="/watchlist"  element={<Placeholder title="My Watchlist" icon={Eye} description="Custom watchlists with real-time alerts coming soon." />} />
+          <Route path="/support"    element={<Placeholder title="Support" icon={HelpCircle} description="Help documentation and support tickets coming soon." />} />
+          <Route path="/settings"   element={<Placeholder title="Settings" icon={Settings} description="Account settings, API keys, and preferences coming soon." />} />
+          {/* Fallback: if user visits /app root, redirect to dashboard */}
+          <Route path="*"           element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </div>
     </div>
@@ -88,16 +102,14 @@ export default function App() {
     <AuthProvider>
       <BrowserRouter>
         <Routes>
-          <Route path="/login" element={
-            <AuthRoute>
-              <Login />
-            </AuthRoute>
-          } />
-          <Route path="/register" element={
-            <AuthRoute>
-              <Register />
-            </AuthRoute>
-          } />
+          {/* Public landing page — the new root */}
+          <Route path="/" element={<Landing />} />
+
+          {/* Auth pages — redirect to /dashboard if already logged in */}
+          <Route path="/login"    element={<AuthRoute><Login /></AuthRoute>} />
+          <Route path="/register" element={<AuthRoute><Register /></AuthRoute>} />
+
+          {/* Protected app shell — all /dashboard, /analyst, /reports, etc. */}
           <Route path="/*" element={
             <ProtectedRoute>
               <AppLayout />
