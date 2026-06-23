@@ -17,7 +17,9 @@ import {
 import { getStats } from '../api/api';
 import { AuthContext } from '../context/AuthContext';
 import { useWebSocket } from '../hooks/useWebSocket';
+import { useChartData } from '../hooks/useChartData';
 import Watchlist from '../components/Watchlist';
+import AssetChart from '../components/AssetChart';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -148,6 +150,7 @@ export default function Dashboard() {
   const { user }          = useContext(AuthContext);
   const { prices, status } = useWebSocket();
   const flash              = usePriceFlash(prices);
+  const { history, activeTicker, setActiveTicker } = useChartData(prices, 'BTC');
 
   const [stats, setStats]     = useState({ total_sessions: 0, indexed_reports: 0, queries_24h: 0, avg_response_time: '…' });
   const [statsLoading, setStatsLoading] = useState(true);
@@ -238,36 +241,14 @@ export default function Dashboard() {
         {/* Watchlist */}
         <Watchlist prices={prices} />
 
-        {/* Performance placeholder */}
-        <div className="card" style={s.chartCard}>
-          <div className="card-title" style={{ marginBottom: 12 }}>
-            <TrendingUp size={15} color="#6366f1" />
-            Portfolio Performance
-            <span className="badge badge-blue" style={{ marginLeft: 'auto' }}>Phase 4</span>
-          </div>
-          <div style={s.chartBars}>
-            {[42, 55, 51, 70, 65, 80, 77, 88, 83, 96].map((h, i) => (
-              <div
-                key={i}
-                style={{
-                  flex: 1,
-                  height: `${h}%`,
-                  background: i === 9
-                    ? 'linear-gradient(to top,#6366f1,#a78bfa)'
-                    : `rgba(99,102,241,${0.15 + i * 0.06})`,
-                  borderRadius: '3px 3px 0 0',
-                  transition: 'height 0.5s ease',
-                }}
-              />
-            ))}
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--color-slate)', marginTop: 8 }}>
-            <span>Jan</span><span>Mar</span><span>May</span><span>Jul</span><span>Sep</span><span>Now</span>
-          </div>
-          <div style={{ marginTop: 16, fontSize: 13, color: 'var(--color-slate)', textAlign: 'center', lineHeight: 1.7 }}>
-            Real portfolio analytics will stream here once<br />holdings tracking is connected in Phase 4.
-          </div>
-        </div>
+        {/* Live Chart */}
+        <AssetChart
+          prices={prices}
+          history={history}
+          activeTicker={activeTicker}
+          setActiveTicker={setActiveTicker}
+          availableTickers={FEATURED}
+        />
       </div>
 
     </div>
@@ -315,12 +296,5 @@ const s = {
     gridTemplateColumns: '1fr 1fr',
     gap: 16,
     marginTop: 20,
-  },
-  chartCard: {
-    display: 'flex', flexDirection: 'column',
-  },
-  chartBars: {
-    display: 'flex', alignItems: 'flex-end', gap: 5,
-    height: 130, marginTop: 8,
   },
 };
