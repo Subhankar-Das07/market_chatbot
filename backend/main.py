@@ -64,6 +64,7 @@ origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "http://localhost:3000",
+    "https://market-chatbot.vercel.app",
 ]
 if FRONTEND_URL and FRONTEND_URL not in origins:
     origins.append(FRONTEND_URL)
@@ -78,7 +79,7 @@ app.add_middleware(
 
 # ── Routes ─────────────────────────────────────────────────────────────────
 app.include_router(health_router)
-app.include_router(auth.router)
+app.include_router(auth.router, prefix="/api/auth")
 app.include_router(chat.router)
 app.include_router(reports.router)
 app.include_router(stats.router)
