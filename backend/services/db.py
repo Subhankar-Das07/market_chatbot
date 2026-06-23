@@ -63,6 +63,8 @@ async def create_indexes():
         await db["market_reports"].create_index([("embedding_status", pymongo.ASCENDING)])
         # Text search index
         await db["market_reports"].create_index([("title", pymongo.TEXT), ("summary", pymongo.TEXT)])
+        # Portfolio indexes
+        await db["user_portfolios"].create_index([("user_id", pymongo.ASCENDING)], unique=True)
         
         logger.info("MongoDB indexes created successfully.")
     except Exception as e:

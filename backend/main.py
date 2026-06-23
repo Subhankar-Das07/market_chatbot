@@ -12,9 +12,12 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from routes import chat, reports, stats, auth
+from routes import ws as ws_routes
+from routes import portfolio as portfolio_routes
 
 from utils.config import get_settings
 from services.db import close_db, create_indexes
+from services.market_data import MarketDataService
 from routes.health import router as health_router
 from routes.chat import router as chat_router
 from routes.reports import router as reports_router
@@ -39,10 +42,19 @@ async def lifespan(app: FastAPI):
     logger.info(f"   Groq model: {settings.GROQ_MODEL}")
     if not settings.GROQ_API_KEY:
         logger.error("⚠️  GROQ_API_KEY not set — backend AI will fail to respond")
-    
+
     await create_indexes()
-    
+
+    # ── Start real-time market data engine ─────────────────────────────────
+    market_service = MarketDataService.instance()
+    await market_service.start_background_feed()
+    logger.info("📈 MarketDataService background feed started.")
+
     yield
+
+    # ── Graceful shutdown ──────────────────────────────────────────────────
+    await market_service.stop_background_feed()
+    logger.info("📉 MarketDataService background feed stopped.")
     logger.info("Shutting down...")
     await close_db()
 
@@ -84,6 +96,9 @@ app.include_router(auth.router, prefix="/api/auth")
 app.include_router(chat.router)
 app.include_router(reports.router)
 app.include_router(stats.router)
+# Real-time engine routes
+app.include_router(ws_routes.router)          # WebSocket: /api/ws/market
+app.include_router(portfolio_routes.router)   # REST CRUD: /api/portfolio/**
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
