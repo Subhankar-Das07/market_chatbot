@@ -10,50 +10,56 @@ router = APIRouter(tags=["auth"])
 
 @router.post("/register")
 async def register(user: UserCreate):
-    db = get_db()
-    
-    # 1. Validate incoming registration data
-    existing_user = await db["users"].find_one({"email": user.email})
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Email already registered")
+    try:
+        db = get_db()
         
-    hashed_password = get_password_hash(user.password)
-    user_dict = {
-        "email": user.email,
-        "hashed_password": hashed_password,
-        "created_at": datetime.now(timezone.utc)
-    }
-    
-    # 2. Insert the new User into the Users collection
-    result = await db["users"].insert_one(user_dict)
-    
-    # 3. AWAIT and retrieve the newly generated user_id
-    user_id_str = str(result.inserted_id)
-    if not user_id_str:
-        raise HTTPException(status_code=500, detail="Failed to generate user ID")
-    
-    # 4. Only after confirming the user_id, insert the new "General Chat" document
-    await db["chat_sessions"].insert_one({
-        "user_id": user_id_str,
-        "title": "General Chat",
-        "created_at": datetime.now(timezone.utc),
-        "updated_at": datetime.now(timezone.utc),
-        "message_count": 0,
-        "is_archived": False
-    })
-    
-    # 5. Generate the Auth Token
-    access_token = create_access_token(data={"sub": user_id_str})
-    
-    # 6. Return the Token and User object to the frontend
-    return {
-        "access_token": access_token,
-        "token_type": "bearer",
-        "user": {
-            "user_id": user_id_str,
-            "email": user.email
+        # 1. Validate incoming registration data
+        existing_user = await db["users"].find_one({"email": user.email})
+        if existing_user:
+            raise HTTPException(status_code=400, detail="Email already registered")
+            
+        hashed_password = get_password_hash(user.password)
+        user_dict = {
+            "email": user.email,
+            "hashed_password": hashed_password,
+            "created_at": datetime.now(timezone.utc)
         }
-    }
+        
+        # 2. Insert the new User into the Users collection
+        result = await db["users"].insert_one(user_dict)
+        
+        # 3. AWAIT and retrieve the newly generated user_id
+        user_id_str = str(result.inserted_id)
+        if not user_id_str:
+            raise HTTPException(status_code=500, detail="Failed to generate user ID")
+        
+        # 4. Only after confirming the user_id, insert the new "General Chat" document
+        await db["chat_sessions"].insert_one({
+            "user_id": user_id_str,
+            "title": "General Chat",
+            "created_at": datetime.now(timezone.utc),
+            "updated_at": datetime.now(timezone.utc),
+            "message_count": 0,
+            "is_archived": False
+        })
+        
+        # 5. Generate the Auth Token
+        access_token = create_access_token(data={"sub": user_id_str})
+        
+        # 6. Return the Token and User object to the frontend
+        return {
+            "access_token": access_token,
+            "token_type": "bearer",
+            "user": {
+                "user_id": user_id_str,
+                "email": user.email
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Database or Server Error: {str(e)}")
 
 @router.post("/token")
 async def login(form_data: OAuth2PasswordRequestForm = Depends()):

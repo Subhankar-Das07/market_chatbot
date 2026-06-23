@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 import services.rag_service
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from routes import chat, reports, stats, auth
 
@@ -83,6 +84,15 @@ app.include_router(auth.router, prefix="/api/auth")
 app.include_router(chat.router)
 app.include_router(reports.router)
 app.include_router(stats.router)
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    import traceback
+    traceback.print_exc()
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"Global Server Crash: {str(exc)}"}
+    )
 
 
 @app.get("/")
